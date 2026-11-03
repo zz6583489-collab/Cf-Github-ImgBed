@@ -248,7 +248,9 @@ export class UploadQueue {
 
         // 最后一次尝试失败
         if (attempt + 1 >= this.maxRetries) {
-          throw new Error(`上传失败（已重试${this.maxRetries}次）: ${error.message}`);
+          const finalError = new Error(`上传失败（已重试${this.maxRetries}次）: ${error.message}`);
+          finalError.githubStatus = error.githubStatus;
+          throw finalError;
         }
 
         // 等待后重试
@@ -307,12 +309,15 @@ export class UploadQueue {
           } else if (xhr.status === 400) {
             // 400 错误：客户端错误（文件类型、大小等），不重试
             let message = '请求错误';
+            let githubStatus;
             try {
               const err = JSON.parse(xhr.responseText);
               message = err.error || message;
+              githubStatus = err.githubStatus;
             } catch {}
             const error = new Error(message);
             error.noRetry = true;
+            error.githubStatus = githubStatus;
             reject(error);
           } else if (xhr.status === 401) {
             // 认证错误，不重试
@@ -333,12 +338,16 @@ export class UploadQueue {
             reject(new Error('已取消'));
           } else {
             // 500 等服务器错误，可以重试
+            let message = `上传失败 (${xhr.status})`;
+            let githubStatus;
             try {
               const err = JSON.parse(xhr.responseText);
-              reject(new Error(err.error || `上传失败 (${xhr.status})`));
-            } catch (e) {
-              reject(new Error(`上传失败 (${xhr.status})`));
-            }
+              message = err.error || message;
+              githubStatus = err.githubStatus;
+            } catch {}
+            const error = new Error(message);
+            error.githubStatus = githubStatus;
+            reject(error);
           }
         }
       };

@@ -119,12 +119,17 @@ test('TOTP is enforced before a signed session is issued', async () => {
   const calls = [];
   const originalFetch = globalThis.fetch;
   let actualPrivate = true;
+  let uploadStatus = 201;
+  let uploadNetworkFailure = false;
   globalThis.fetch = async (url, options) => {
     calls.push({ url: String(url), auth: options?.headers?.Authorization });
     if (String(url) === 'https://api.github.com/repos/owner/images') {
       return Response.json({ private: actualPrivate });
     }
-    if (options?.method === 'PUT') return Response.json({}, { status: 201 });
+    if (options?.method === 'PUT') {
+      if (uploadNetworkFailure) throw new Error('mock network failure');
+      return Response.json(uploadStatus === 201 ? {} : { message: 'mock GitHub rejection' }, { status: uploadStatus });
+    }
     return String(url).startsWith('https://api.github.com/')
       ? Response.json({ type: 'file', download_url: 'https://raw.githubusercontent.com/owner/images/main/images/secret.png' })
       : new Response('PRIVATE_IMAGE', { headers: { 'Content-Type': 'image/png' } });
@@ -167,6 +172,23 @@ test('TOTP is enforced before a signed session is issued', async () => {
     const unknown = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: unknownRepoForm });
     assert.equal(unknown.status, 400);
     assert.equal((await unknown.json()).error, 'repoVisibilityCheckFailed');
+
+    actualPrivate = true;
+    uploadStatus = 403;
+    const deniedForm = new FormData();
+    deniedForm.set('image', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'sample.png');
+    deniedForm.set('repoId', 'private');
+    const denied = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: deniedForm });
+    assert.equal(denied.status, 400);
+    assert.deepEqual(await denied.json(), { error: 'githubPermissionDenied', githubStatus: 403 });
+
+    uploadNetworkFailure = true;
+    const networkForm = new FormData();
+    networkForm.set('image', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'sample.png');
+    networkForm.set('repoId', 'private');
+    const unavailable = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: networkForm });
+    assert.equal(unavailable.status, 502);
+    assert.equal((await unavailable.json()).error, 'githubUnavailable');
   } finally {
     settings.repositories[0].isPublic = false;
     publicImages.length = 0;

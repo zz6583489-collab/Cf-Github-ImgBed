@@ -464,9 +464,11 @@
   };
 
   const uploadErrorText = (error) => {
-    const key = `api.${error.message}`;
+    const code = error.message.split(': ').at(-1);
+    const key = `api.${code}`;
     const translated = t(key);
-    return translated === key ? error.message : translated;
+    const message = translated === key ? error.message : translated;
+    return error.githubStatus ? `${message} (GitHub ${error.githubStatus})` : message;
   };
 
   const addFiles = (files) => {

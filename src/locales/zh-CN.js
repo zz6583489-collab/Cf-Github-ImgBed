@@ -324,6 +324,11 @@ export const zh_cn_messages = {
     fileTooLarge: '文件大小超过限制（最大 20MB）',
     privateImageRequiresPrivateRepo: '私密图片只能存入 GitHub 私有仓库',
     repoVisibilityCheckFailed: '无法核实仓库是否为私有；请检查 GitHub Token 对该仓库的访问权限',
+    githubUnavailable: '无法连接 GitHub，或 GitHub 暂时不可用',
+    githubPermissionDenied: 'GitHub Token 无法写入目标仓库，请检查权限',
+    githubRepoOrBranchNotFound: '未找到目标仓库或分支，请检查仓库配置',
+    githubUploadRejected: 'GitHub 拒绝上传，请检查仓库路径和文件限制',
+    internalError: '服务器处理异常，请查看 Cloudflare 日志',
     // 仓库相关
     incompleteRepoConfig: '仓库配置不完整',
     repoNotFound: '仓库不存在',

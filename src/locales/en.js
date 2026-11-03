@@ -327,6 +327,11 @@ export const en_messages = {
     fileTooLarge: 'File size exceeds limit (max 20MB)',
     privateImageRequiresPrivateRepo: 'Private images require a private GitHub repository',
     repoVisibilityCheckFailed: 'Could not verify repository visibility; check the GitHub token access',
+    githubUnavailable: 'GitHub is unreachable or temporarily unavailable',
+    githubPermissionDenied: 'The GitHub token cannot write to the target repository',
+    githubRepoOrBranchNotFound: 'Target repository or branch not found',
+    githubUploadRejected: 'GitHub rejected the upload; check the repository path and file limits',
+    internalError: 'Server error; check the Cloudflare logs',
     // Repository related
     incompleteRepoConfig: 'Incomplete repository configuration',
     repoNotFound: 'Repository not found',

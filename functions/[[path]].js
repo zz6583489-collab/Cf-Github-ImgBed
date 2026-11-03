@@ -1,4 +1,13 @@
 export async function onRequest(context) {
+  try {
+    return await routeRequest(context);
+  } catch (error) {
+    console.error('请求处理异常:', error);
+    return jsonResponse({ error: 'internalError' }, 500);
+  }
+}
+
+async function routeRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const pathname = url.pathname;
@@ -436,19 +445,32 @@ async function handleUpload(request, env) {
     branch: repo.branch || 'main',
   });
 
-  const ghResponse = await fetch(apiUrl, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${repo.token}`,
-      'Content-Type': 'application/json',
-      'User-Agent': 'Cf-Github-ImgBed',
-    },
-    body: body,
-  });
+  let ghResponse;
+  try {
+    ghResponse = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${repo.token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'Cf-Github-ImgBed',
+      },
+      body,
+    });
+  } catch (error) {
+    console.error('GitHub 上传请求失败:', error);
+    return jsonResponse({ error: 'githubUnavailable' }, 502);
+  }
 
   if (!ghResponse.ok) {
-    const err = await ghResponse.json().catch(() => ({ message: 'GitHub unknownError' }));
-    throw new Error(err.message || '上传到 GitHub 失败');
+    const err = await ghResponse.json().catch(() => ({}));
+    console.error('GitHub 拒绝上传:', ghResponse.status, err?.message || 'unknown');
+    const upstreamUnavailable = ghResponse.status >= 500 || ghResponse.status === 429;
+    let error = 'githubUploadRejected';
+    if (upstreamUnavailable) error = 'githubUnavailable';
+    else if (ghResponse.status === 401 || ghResponse.status === 403) error = 'githubPermissionDenied';
+    else if (ghResponse.status === 404) error = 'githubRepoOrBranchNotFound';
+    const status = upstreamUnavailable ? 502 : 400;
+    return jsonResponse({ error, githubStatus: ghResponse.status }, status);
   }
 
   const imageUrl = `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${repo.branch || 'main'}/${filePath}`;

@@ -15,7 +15,7 @@ test('upload queue sends the selected repository and preserves a 400 error code'
       sentRepoId = formData.get('repoId');
       this.readyState = 4;
       this.status = 400;
-      this.responseText = JSON.stringify({ error: 'privateImageRequiresPrivateRepo' });
+      this.responseText = JSON.stringify({ error: 'githubPermissionDenied', githubStatus: 403 });
       queueMicrotask(() => this.onreadystatechange());
     }
     abort() {}
@@ -32,7 +32,8 @@ test('upload queue sends the selected repository and preserves a 400 error code'
       });
     });
     assert.equal(sentRepoId, 'private-repo');
-    assert.equal(error.message, 'privateImageRequiresPrivateRepo');
+    assert.equal(error.message, 'githubPermissionDenied');
+    assert.equal(error.githubStatus, 403);
     assert.equal(error.noRetry, true);
   } finally {
     globalThis.XMLHttpRequest = originalXHR;
