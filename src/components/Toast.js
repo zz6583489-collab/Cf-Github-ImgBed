@@ -1,30 +1,30 @@
 import { t } from '../utils/i18n.js';
 
 export function showToast(message, type = 'info', duration = 3000) {
-  if (window.cocoMessage) {
-    const typeMap = {
-      success: 'success',
-      error: 'error',
-      warning: 'warning',
-      info: 'info',
-    };
-    const method = typeMap[type] || 'info';
-    window.cocoMessage[method](message, duration);
-  } else {
-    console.log(`[${type}] ${message}`);
-    if (type === 'error') {
-      alert(message);
-    }
-  }
+  createLocalToast(message, type, duration);
 }
 
 export function showLoading(message = '') {
   const msg = message || t('common.loading');
-  if (window.cocoMessage && typeof window.cocoMessage.loading === 'function') {
-    return window.cocoMessage.loading(msg);
+  return createLocalToast(msg, 'info', 0);
+}
+
+function createLocalToast(message, type, duration) {
+  let container = document.getElementById('local-toasts');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'local-toasts';
+    container.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:4000;display:grid;gap:8px;max-width:min(90vw,520px)';
+    document.body.appendChild(container);
   }
-  console.log(`[loading] ${msg}`);
-  return () => console.log(`[loading] 关闭`);
+  const item = document.createElement('div');
+  item.textContent = String(message);
+  const colors = { success: '#16834a', error: '#c0392b', warning: '#b26b00', info: '#2563eb' };
+  item.style.cssText = `background:${colors[type] || colors.info};color:white;padding:10px 16px;border-radius:8px;box-shadow:0 4px 16px #0003;line-height:1.5;overflow-wrap:anywhere`;
+  container.appendChild(item);
+  const close = () => item.remove();
+  if (duration > 0) setTimeout(close, duration);
+  return close;
 }
 
 let loadingInstance = null;
@@ -64,8 +64,9 @@ export function showLoadingWithUpdate(initialText) {
 
   loadingDiv.innerHTML = `
     ${loadingSvg}
-    <div class="toast-content">${initialText || '加载中...'}</div>
+    <div class="toast-content"></div>
   `;
+  loadingDiv.querySelector('.toast-content').textContent = initialText || '加载中...';
 
   // 添加样式（如果还没有）
   if (!document.getElementById('toast-styles')) {

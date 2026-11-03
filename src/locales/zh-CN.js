@@ -23,6 +23,7 @@ export const zh_cn_messages = {
     totpSecret: '密钥',
     totpPlaceholder: '请输入6位验证码',
     totpEnabled: '二次验证已启用',
+    totpVerifiedSave: '验证码正确，请保存设置以启用二次验证',
     totpDisabled: '二次验证已关闭',
   },
   // 导航栏
@@ -307,6 +308,9 @@ export const zh_cn_messages = {
     lackAuthToken: '缺少认证令牌',
     wrongPassword: '密码错误',
     authFailed: '认证失败，请重试',
+    totpError: '动态验证码错误',
+    totpNotConfigured: '二次验证配置不完整，请联系管理员',
+    invalidTotpSecret: '二次验证密钥无效',
     // 随机图片相关
     randomIsDisable: '随机图片接口未启用',
     disallowedHost: '该主机名不被允许访问随机图片接口',
@@ -318,6 +322,7 @@ export const zh_cn_messages = {
     noUploadedImage: '未提供图片文件',
     invalidFileType: '不支持的文件类型，仅允许：JPG、PNG、GIF、WebP',
     fileTooLarge: '文件大小超过限制（最大 20MB）',
+    privateImageRequiresPrivateRepo: '私密图片只能存入 GitHub 私有仓库',
     // 仓库相关
     incompleteRepoConfig: '仓库配置不完整',
     repoNotFound: '仓库不存在',

@@ -4,10 +4,9 @@ export async function onRequest(context) {
   const pathname = url.pathname;
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
 
-  const rateLimiter = new RateLimiter();
-
-  if (pathname.startsWith('/api/')) {
-    const allowed = await rateLimiter.checkLimit(env, ip, pathname);
+  if (API_ROUTES.has(pathname) || pathname.startsWith('/api/preview/')) {
+    const route = pathname.startsWith('/api/preview/') ? '/api/preview' : pathname;
+    const allowed = rateLimiter.checkLimit(ip, route);
     if (!allowed) {
       return jsonResponse({ error: 'rateLimit' }, 429);
     }
@@ -16,7 +15,7 @@ export async function onRequest(context) {
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': url.origin,
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         'Access-Control-Max-Age': '86400',
@@ -48,7 +47,9 @@ export async function onRequest(context) {
 
     if (pathname === '/api/delete' && request.method === 'POST') response = await handleDelete(request, env);
 
-    if (pathname === '/api/settings' && request.method === 'GET') response = await handleGetSettings(env);
+    if (pathname === '/api/settings' && request.method === 'GET') response = await handleGetSettings(request, env);
+
+    if (pathname === '/api/logout' && request.method === 'POST') response = handleLogout();
 
     if (pathname === '/api/settings' && request.method === 'POST') response = await handleUpdateSettings(request, env);
 
@@ -68,7 +69,12 @@ export async function onRequest(context) {
     }
 
     const newHeaders = new Headers(response.headers);
-    newHeaders.set('Access-Control-Allow-Origin', '*');
+    // Authenticated API responses must not be readable from unrelated origins.
+    newHeaders.set('Access-Control-Allow-Origin', url.origin);
+    newHeaders.set('Vary', 'Origin');
+    newHeaders.set('X-Content-Type-Options', 'nosniff');
+    newHeaders.set('Referrer-Policy', 'no-referrer');
+    if (!newHeaders.has('Cache-Control')) newHeaders.set('Cache-Control', 'no-store');
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
@@ -76,8 +82,19 @@ export async function onRequest(context) {
     });
   }
 
-  return env.ASSETS.fetch(request);
+  const asset = await env.ASSETS.fetch(request);
+  const headers = new Headers(asset.headers);
+  headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
 }
+
+const API_ROUTES = new Set([
+  '/api/auth', '/api/verifyLogin', '/api/random', '/api/images', '/api/upload',
+  '/api/delete', '/api/settings', '/api/logout', '/api/getSettingsUpdateTime',
+  '/api/checkRepositoryStatus', '/api/batch-visibility',
+]);
 
 // ================= API 处理函数 =================
 async function handleRandom(request, env) {
@@ -92,7 +109,12 @@ async function handleRandom(request, env) {
   if (randomAllowedHosts !== '*') {
     const referer = request.headers.get('Referer') || '';
     const origin = request.headers.get('Origin') || '';
-    const requestHost = referer ? new URL(referer).hostname : origin ? new URL(origin).hostname : '';
+    let requestHost = '';
+    try {
+      requestHost = referer ? new URL(referer).hostname : origin ? new URL(origin).hostname : '';
+    } catch {
+      return jsonResponse({ error: 'disallowedHost' }, 403);
+    }
 
     if (requestHost) {
       const allowedHosts = randomAllowedHosts.split(',').map((h) => h.trim());
@@ -107,6 +129,8 @@ async function handleRandom(request, env) {
       if (!isAllowed) {
         return jsonResponse({ error: 'disallowedHost' }, 403);
       }
+    } else {
+      return jsonResponse({ error: 'disallowedHost' }, 403);
     }
   }
 
@@ -118,7 +142,7 @@ async function handleRandom(request, env) {
   const allImages = await getAllImages(env);
   const publicMap = await getPublicMapFromKV(env);
 
-  const publicImages = allImages.filter((img) => !!publicMap[img.name]);
+  const publicImages = allImages.filter((img) => !!publicMap[imageKey(img.repoId, img.name)]);
 
   if (!publicImages || !Array.isArray(publicImages) || publicImages.length === 0) {
     return jsonResponse({ error: 'noPublicImages' }, 404);
@@ -141,7 +165,8 @@ async function handleRandom(request, env) {
   const image = filteredImages[Math.floor(Math.random() * filteredImages.length)];
 
   // 获取该图片所属仓库配置
-  const repo = getRepositoryById(env, image.repoId);
+  const repo = await getRepositoryById(env, image.repoId);
+  if (!repo) return jsonResponse({ error: 'repoNotFound' }, 404);
 
   // 构建图片 URL
   const cdnBase = repo.cdnBase || 'https://cdn.jsdmirror.com/gh';
@@ -203,9 +228,9 @@ async function handleRandom(request, env) {
         return jsonResponse({ error: 'fetchImageFailed' }, 500);
       }
 
-      const contentType = imageResponse.headers.get('Content-Type') || getContentType(image.name);
       const headers = new Headers();
-      headers.set('Content-Type', contentType);
+      headers.set('Content-Type', getContentType(image.name));
+      headers.set('X-Content-Type-Options', 'nosniff');
       headers.set('Cache-Control', 'public, max-age=3600');
       headers.set('Access-Control-Allow-Origin', '*');
 
@@ -226,7 +251,7 @@ async function handleImages(request, env) {
   const publicMap = await getPublicMapFromKV(env);
 
   return jsonResponse({
-    images: allImages.map((img) => ({ ...img, public: !!publicMap[img.name] })),
+    images: allImages.map((img) => ({ ...img, public: !!publicMap[imageKey(img.repoId, img.name)] })),
     total: allImages.length,
   });
 }
@@ -334,7 +359,7 @@ async function getImageListForRepo(repoConfig) {
     const data = await response.json();
     if (!Array.isArray(data)) return [];
 
-    const imageRegex = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/i;
+    const imageRegex = /\.(jpg|jpeg|png|gif|webp)$/i;
 
     return data
       .filter((item) => item.type === 'file' && imageRegex.test(item.name))
@@ -381,11 +406,15 @@ async function handleUpload(request, env) {
 
   // 获取目标仓库配置
   const repo = await getRepositoryById(env, repoId);
-  if (!repo.owner || !repo.repo || !repo.token) {
+  if (!repo || !repo.owner || !repo.repo || !repo.token) {
     return jsonResponse({ error: 'incompleteRepoConfig' }, 500);
   }
 
-  const ext = (file.name.split('.').pop() || 'png').toLowerCase();
+  if (!isPublic && (repo.isPublic || !(await isPrivateRepository(repo)))) {
+    return jsonResponse({ error: 'privateImageRequiresPrivateRepo' }, 400);
+  }
+
+  const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' }[file.type];
   const timestamp = Date.now();
   const randomStr = crypto.randomUUID
     ? crypto.randomUUID().substring(0, 8)
@@ -460,7 +489,7 @@ async function handleDelete(request, env) {
   }
 
   const { filename, repoId } = body;
-  if (!filename || filename.includes('/') || filename.includes('..')) {
+  if (typeof filename !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.(?:jpe?g|png|gif|webp)$/i.test(filename)) {
     return jsonResponse({ error: 'invalidFilename' }, 400);
   }
   if (!repoId) {
@@ -468,14 +497,15 @@ async function handleDelete(request, env) {
   }
 
   const repo = await getRepositoryById(env, repoId);
+  if (!repo) return jsonResponse({ error: 'repoNotFound' }, 404);
 
-  const repoPath = (repo.path || 'images').replace(/^\/+|\/+$/g, '');
+  const repoPath = (repo.path || '').replace(/^\/+|\/+$/g, '');
   const filePath = repoPath ? `${repoPath}/${filename}` : filename;
   const apiUrl = `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${filePath}`;
 
-  const getResponse = await fetch(apiUrl, {
+  const getResponse = await fetch(`${apiUrl}?ref=${encodeURIComponent(repo.branch || 'main')}`, {
     headers: {
-      Authorization: `token ${env.GITHUB_TOKEN}`,
+      Authorization: `token ${repo.token}`,
       'User-Agent': 'Cf-Github-ImgBed',
     },
   });
@@ -492,7 +522,7 @@ async function handleDelete(request, env) {
   const deleteResponse = await fetch(apiUrl, {
     method: 'DELETE',
     headers: {
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Authorization: `Bearer ${repo.token}`,
       'Content-Type': 'application/json',
       'User-Agent': 'Cf-Github-ImgBed',
     },
@@ -510,7 +540,7 @@ async function handleDelete(request, env) {
 
   if (env.KV) {
     try {
-      await removePublicImageFromKV(env, filename);
+      await removePublicImageFromKV(env, filename, repoId);
     } catch (kvError) {
       console.error('KV 删除错误:', kvError.message);
     }
@@ -550,14 +580,24 @@ async function handleBatchVisibility(request, env) {
   try {
     const results = { success: [], failed: [] };
 
+    const privateRepoChecks = new Map();
     for (const file of filesList) {
-      const filename = file.name;
-      const repoId = file.repoId;
+      const filename = file?.name;
+      const repoId = file?.repoId;
       try {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.(?:jpe?g|png|gif|webp)$/i.test(filename)) {
+          throw new Error('invalidFilename');
+        }
+        const repo = await getRepositoryById(env, repoId);
+        if (!repo) throw new Error('repoNotFound');
+        if (!isPublic) {
+          if (!privateRepoChecks.has(repoId)) {
+            privateRepoChecks.set(repoId, !repo.isPublic && await isPrivateRepository(repo));
+          }
+          if (!privateRepoChecks.get(repoId)) throw new Error('privateImageRequiresPrivateRepo');
+        }
         if (isPublic) {
-          const repo = await getRepositoryById(env, repoId);
-          let path = (repo.path || 'images').replace(/^\/+|\/+$/g, '');
-          if (repo) path = `${repo.path}/`;
+          const path = repo.path ? `${repo.path.replace(/^\/+|\/+$/g, '')}/` : '';
 
           const imageUrl = `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${repo.branch || 'main'}/${path}${filename}`;
           await addPublicImageToKV(env, filename, {
@@ -565,9 +605,10 @@ async function handleBatchVisibility(request, env) {
             url: imageUrl,
             size: 0,
             uploadedAt: Date.now(),
+            repoId,
           });
         } else {
-          await removePublicImageFromKV(env, filename);
+          await removePublicImageFromKV(env, filename, repoId);
         }
         results.success.push(filename);
       } catch (err) {
@@ -593,20 +634,20 @@ async function handleBatchVisibility(request, env) {
  */
 async function getRepositoryById(env, repoId) {
   const repositories = await getRepositories(env);
-  return (
-    repositories.find((r) => r.id === repoId) ||
-    repositories[0] || {
-      id: 'default',
-      name: 'Default Repo',
-      owner: '',
-      repo: '',
-      branch: 'main',
-      path: 'images',
-      token: '',
-      isPublic: false,
-      isDefault: false,
-    }
-  );
+  return repositories.find((r) => r.id === repoId) || null;
+}
+
+async function isPrivateRepository(repo) {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}`, {
+      headers: { Authorization: `Bearer ${repo.token}`, 'User-Agent': 'Cf-Github-ImgBed' },
+    });
+    if (!response.ok) return false;
+    const metadata = await response.json();
+    return metadata.private === true;
+  } catch {
+    return false;
+  }
 }
 
 async function handleGetPublicKey(env) {
@@ -625,7 +666,7 @@ async function handleAuth(request, env) {
     return jsonResponse({ error: 'invalidData' }, 400);
   }
 
-  const { token } = body;
+  const { token, totpCode } = body;
   if (!token) {
     return jsonResponse({ error: 'lackAuthToken' }, 400);
   }
@@ -638,19 +679,37 @@ async function handleAuth(request, env) {
   try {
     const decrypted = await rsaDecrypt(token, env.RSA_PRIVATE_KEY);
     if (decrypted === env.ADMIN_PASSWORD) {
-      const sessionToken = await generateSessionToken(decrypted, env);
+      // Authentication must fail closed if security settings cannot be read.
+      const authSettings = await env.KV.get('site_settings', { type: 'json' });
+      const totp = authSettings?.totp;
+      if (totp?.enable) {
+        if (!totp.secret) return jsonResponse({ valid: false, error: 'totpNotConfigured' }, 500);
+        if (!totpCode) return jsonResponse({ valid: true, totpRequired: true });
+        if (!(await verifyTotpCode(totp.secret, totpCode))) {
+          return jsonResponse({ valid: false, error: 'totpError' }, 401);
+        }
+      }
+      const sessionToken = await generateSessionToken(env);
 
       const allowRandom = await getKVSetting(env, 'allowRandom', false);
-      return jsonResponse({
+      const response = jsonResponse({
         valid: true,
         token: sessionToken,
-        allowRandom: allowRandom === 'true',
+        allowRandom: allowRandom === true,
       });
+      response.headers.set('Set-Cookie', `preview_session=${encodeURIComponent(sessionToken)}; Path=/api/preview; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`);
+      return response;
     }
     return jsonResponse({ valid: false, error: 'wrongPassword' }, 401);
   } catch (error) {
     return jsonResponse({ valid: false, error: 'authFailed' }, 401);
   }
+}
+
+function handleLogout() {
+  const response = jsonResponse({ success: true });
+  response.headers.set('Set-Cookie', 'preview_session=; Path=/api/preview; HttpOnly; Secure; SameSite=Strict; Max-Age=0');
+  return response;
 }
 
 async function handleVerifyLogin(request, env) {
@@ -661,7 +720,8 @@ async function handleVerifyLogin(request, env) {
   return jsonResponse({ valid: true });
 }
 
-async function handleGetSettings(env) {
+async function handleGetSettings(request, env) {
+  if (!(await verifyAuth(request, env))) return jsonResponse({ error: 'notAuthorized' }, 401);
   let kvSettings = {};
 
   if (env.KV) {
@@ -679,11 +739,24 @@ async function handleGetSettings(env) {
 
   const settings = {
     siteTitle: kvSettings.siteTitle || 'Cf-Github-ImgBed',
+    siteSubtitle: kvSettings.siteSubtitle || '',
     maxRetries: kvSettings.maxRetries || 3,
     pageSize: kvSettings.pageSize || 20,
     allowRandom: kvSettings.allowRandom || false,
     randomAllowedHosts: kvSettings.randomAllowedHosts || '*',
-    repositories: kvSettings.repositories || [],
+    repositories: (Array.isArray(kvSettings.repositories) ? kvSettings.repositories : []).map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      owner: repo.owner,
+      repo: repo.repo,
+      branch: repo.branch,
+      path: repo.path,
+      isDefault: repo.isDefault,
+      isPublic: repo.isPublic,
+      cdnBase: repo.cdnBase,
+      token: '',
+      hasToken: !!repo.token,
+    })),
     githubOwner: kvSettings.githubOwner || '',
     githubRepo: kvSettings.githubRepo || '',
     githubBranch: kvSettings.githubBranch || 'main',
@@ -691,7 +764,6 @@ async function handleGetSettings(env) {
     activeRepository: kvSettings.activeRepository || 'default',
     totp: {
       enable: (kvSettings.totp && kvSettings.totp.enable) || false,
-      secret: (kvSettings.totp && kvSettings.totp.secret) || '',
     },
     updateTime,
   };
@@ -721,6 +793,10 @@ async function handleUpdateSettings(request, env) {
     return jsonResponse({ error: 'noKV' }, 500);
   }
 
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return jsonResponse({ error: 'invalidData' }, 400);
+  }
+
   try {
     // 读取现有设置
     let currentSettings = {};
@@ -729,9 +805,49 @@ async function handleUpdateSettings(request, env) {
       currentSettings = existing;
     }
 
-    // 合并所有提交的字段（不限于白名单，支持嵌套对象）
-    const newSettings = deepMerge(currentSettings, body);
-    const updateTime = newSettings.updateTime || Date.now();
+    const newSettings = { ...currentSettings };
+    for (const key of ['siteTitle', 'siteSubtitle', 'randomAllowedHosts', 'githubOwner', 'githubRepo', 'githubBranch', 'githubPath', 'activeRepository']) {
+      if (Object.hasOwn(body, key) && typeof body[key] === 'string') newSettings[key] = body[key];
+    }
+    for (const key of ['maxRetries', 'pageSize']) {
+      if (Object.hasOwn(body, key) && Number.isSafeInteger(body[key]) && body[key] > 0 && body[key] <= 100) {
+        newSettings[key] = body[key];
+      }
+    }
+    if (typeof body.allowRandom === 'boolean') newSettings.allowRandom = body.allowRandom;
+
+    if (Object.hasOwn(body, 'repositories')) {
+      if (!Array.isArray(body.repositories) || body.repositories.length > 20) {
+        return jsonResponse({ error: 'invalidData' }, 400);
+      }
+      const previousRepos = new Map((currentSettings.repositories || []).map((repo) => [repo.id, repo]));
+      newSettings.repositories = body.repositories.map((repo) => {
+        if (!repo || typeof repo !== 'object' || typeof repo.id !== 'string') throw new Error('invalidRepository');
+        const old = previousRepos.get(repo.id) || {};
+        return {
+          id: repo.id,
+          name: String(repo.name || ''),
+          owner: String(repo.owner || ''),
+          repo: String(repo.repo || ''),
+          branch: String(repo.branch || 'main'),
+          path: String(repo.path || ''),
+          isDefault: repo.isDefault === true,
+          isPublic: repo.isPublic === true,
+          cdnBase: String(repo.cdnBase || ''),
+          token: repo.clearToken === true ? '' : (typeof repo.token === 'string' && repo.token ? repo.token : old.token || ''),
+        };
+      });
+    }
+
+    if (body.totp && typeof body.totp === 'object') {
+      const enable = body.totp.enable === true;
+      const secret = enable ? (body.totp.secret || currentSettings.totp?.secret || '') : '';
+      if (enable && !/^[A-Z2-7]{16,64}$/.test(secret)) {
+        return jsonResponse({ error: 'invalidTotpSecret' }, 400);
+      }
+      newSettings.totp = { enable, secret };
+    }
+    const updateTime = Date.now();
 
     // 保存到 KV
     await env.KV.put('site_settings', JSON.stringify(newSettings));
@@ -795,31 +911,22 @@ async function handleCheckRepositoryStatus(request, env) {
   }
 }
 
-// 深度合并对象
-function deepMerge(target, source) {
-  const output = { ...target };
-
-  for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-      output[key] = deepMerge(output[key] || {}, source[key]);
-    } else {
-      output[key] = source[key];
-    }
-  }
-
-  return output;
-}
-
 async function handlePreview(request, env) {
   const url = new URL(request.url);
-  const pathParts = url.pathname.replace('/api/preview/', '').split('/');
-  const filename = pathParts[pathParts.length - 1];
-
-  if (!filename || filename.includes('..')) {
+  let filename;
+  try {
+    filename = decodeURIComponent(url.pathname.slice('/api/preview/'.length));
+  } catch {
     return jsonResponse({ error: 'invalidFilename' }, 400);
   }
 
-  // 获取仓库列表
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.(?:jpe?g|png|gif|webp)$/i.test(filename)) {
+    return jsonResponse({ error: 'invalidFilename' }, 400);
+  }
+
+  const requestedRepoId = url.searchParams.get('repoId');
+  const publicMap = await getPublicMapFromKV(env);
+  const authorized = await verifyPreviewSession(request, env);
   const repositories = await getRepositories(env);
 
   if (repositories.length === 0) {
@@ -828,6 +935,9 @@ async function handlePreview(request, env) {
 
   // 遍历所有仓库查找文件
   for (const repo of repositories) {
+    if (requestedRepoId && repo.id !== requestedRepoId) continue;
+    const isPublic = !!publicMap[imageKey(repo.id, filename)];
+    if (!isPublic && !authorized) continue;
     const repoPath = (repo.path || '').replace(/^\/+|\/+$/g, '');
     const filePath = repoPath ? `${repoPath}/${filename}` : filename;
     const apiUrl = `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${filePath}?ref=${repo.branch || 'main'}`;
@@ -844,6 +954,10 @@ async function handlePreview(request, env) {
       if (metaResponse.ok) {
         const fileData = await metaResponse.json();
 
+        if (fileData.type !== 'file' || !fileData.download_url || new URL(fileData.download_url).origin !== 'https://raw.githubusercontent.com') {
+          continue;
+        }
+
         const fileResponse = await fetch(fileData.download_url, {
           headers: {
             Authorization: `token ${repo.token || env.GITHUB_TOKEN}`,
@@ -852,11 +966,10 @@ async function handlePreview(request, env) {
         });
 
         if (fileResponse.ok) {
-          const contentType = fileResponse.headers.get('Content-Type') || getContentType(filename);
           const headers = new Headers();
-          headers.set('Content-Type', contentType);
-          headers.set('Cache-Control', 'public, max-age=3600');
-          headers.set('Access-Control-Allow-Origin', '*');
+          headers.set('Content-Type', getContentType(filename));
+          headers.set('X-Content-Type-Options', 'nosniff');
+          headers.set('Cache-Control', isPublic ? 'public, max-age=3600' : 'private, no-store');
 
           return new Response(fileResponse.body, {
             status: 200,
@@ -869,7 +982,18 @@ async function handlePreview(request, env) {
     }
   }
 
-  return jsonResponse({ error: 'fileNotFound' }, 404);
+  return jsonResponse({ error: authorized ? 'fileNotFound' : 'notAuthorized' }, authorized ? 404 : 401);
+}
+
+async function verifyPreviewSession(request, env) {
+  const cookie = request.headers.get('Cookie') || '';
+  const token = cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith('preview_session='));
+  if (!token) return false;
+  try {
+    return await verifyToken(decodeURIComponent(token.slice('preview_session='.length)), env);
+  } catch {
+    return false;
+  }
 }
 
 // ========== 工具函数 ==========
@@ -905,18 +1029,18 @@ async function verifyToken(token, env) {
   }
 
   try {
-    const decrypted = await rsaDecrypt(token, env.RSA_PRIVATE_KEY);
-    const parts = decrypted.split(':');
+    const parts = token.split('.');
     if (parts.length !== 2) return false;
+    const payload = new TextDecoder().decode(base64ToArrayBuffer(parts[0]));
+    const [timestampStr, nonce] = payload.split(':');
+    if (!nonce || !/^[0-9a-f-]{36}$/.test(nonce)) return false;
+    const timestamp = Number(timestampStr);
 
-    const [password, timestampStr] = parts;
-    const timestamp = parseInt(timestampStr);
-
-    if (isNaN(timestamp) || Date.now() - timestamp > 24 * 60 * 60 * 1000) {
+    if (!Number.isSafeInteger(timestamp) || timestamp > Date.now() || Date.now() - timestamp > 24 * 60 * 60 * 1000) {
       return false;
     }
-
-    return password === env.ADMIN_PASSWORD;
+    const key = await getSessionKey(env);
+    return crypto.subtle.verify('HMAC', key, base64ToArrayBuffer(parts[1]), new TextEncoder().encode(payload));
   } catch {
     return false;
   }
@@ -940,7 +1064,7 @@ async function getPublicMapFromKV(env) {
     const images = await getPublicImagesFromKV(env);
     const map = {};
     for (const img of images) {
-      if (img && img.name) map[img.name] = true;
+      if (img && img.name && img.repoId) map[imageKey(img.repoId, img.name)] = true;
     }
     return map;
   } catch {
@@ -951,16 +1075,49 @@ async function getPublicMapFromKV(env) {
 async function addPublicImageToKV(env, filename, imageData) {
   if (!env.KV) return;
   const images = await getPublicImagesFromKV(env);
-  const idx = images.findIndex((img) => img.name === filename);
+  const idx = images.findIndex((img) => img.name === filename && img.repoId === imageData.repoId);
   if (idx >= 0) images[idx] = imageData;
   else images.push(imageData);
   await env.KV.put('public_images', JSON.stringify(images));
 }
 
-async function removePublicImageFromKV(env, filename) {
+async function removePublicImageFromKV(env, filename, repoId) {
   if (!env.KV) return;
   const images = await getPublicImagesFromKV(env);
-  await env.KV.put('public_images', JSON.stringify(images.filter((img) => img.name !== filename)));
+  await env.KV.put('public_images', JSON.stringify(images.filter((img) => img.name !== filename || img.repoId !== repoId)));
+}
+
+function imageKey(repoId, filename) {
+  return `${repoId}:${filename}`;
+}
+
+async function verifyTotpCode(secret, code) {
+  if (!/^\d{6}$/.test(String(code))) return false;
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0;
+  let value = 0;
+  const bytes = [];
+  for (const char of secret) {
+    const digit = alphabet.indexOf(char);
+    if (digit < 0) return false;
+    value = (value << 5) | digit;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((value >>> bits) & 255);
+    }
+  }
+  const key = await crypto.subtle.importKey('raw', new Uint8Array(bytes), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const now = Math.floor(Date.now() / 30000);
+  for (let step = now - 1; step <= now + 1; step++) {
+    const counter = new ArrayBuffer(8);
+    new DataView(counter).setUint32(4, step);
+    const digest = new Uint8Array(await crypto.subtle.sign('HMAC', key, counter));
+    const offset = digest[digest.length - 1] & 15;
+    const number = ((digest[offset] & 127) << 24) | (digest[offset + 1] << 16) | (digest[offset + 2] << 8) | digest[offset + 3];
+    if (String(number % 1000000).padStart(6, '0') === String(code)) return true;
+  }
+  return false;
 }
 
 // ========== 加密函数 ==========
@@ -978,14 +1135,20 @@ async function rsaDecrypt(encryptedBase64, privateKeyBase64) {
   return new TextDecoder().decode(decrypted);
 }
 
-async function generateSessionToken(password, env) {
-  const data = `${password}:${Date.now()}`;
-  const publicKeyData = base64ToArrayBuffer(env.RSA_PUBLIC_KEY);
-  const publicKey = await crypto.subtle.importKey('spki', publicKeyData, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, [
-    'encrypt',
-  ]);
-  const encrypted = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, publicKey, new TextEncoder().encode(data));
-  return arrayBufferToBase64(encrypted);
+async function generateSessionToken(env) {
+  const payload = `${Date.now()}:${crypto.randomUUID()}`;
+  const key = await getSessionKey(env);
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  return `${toBase64Url(new TextEncoder().encode(payload))}.${toBase64Url(signature)}`;
+}
+
+async function getSessionKey(env) {
+  const secret = new TextEncoder().encode(`${env.RSA_PRIVATE_KEY}:${env.ADMIN_PASSWORD}`);
+  return crypto.subtle.importKey('raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+}
+
+function toBase64Url(buffer) {
+  return arrayBufferToBase64(buffer).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 // ========== 通用工具 ==========
@@ -1050,45 +1213,35 @@ function base64ToArrayBuffer(base64) {
  * 使用滑动窗口算法实现限流功能
  */
 class RateLimiter {
-  /**
-   * 构造函数，初始化存储窗口数据的Map
-   */
   constructor() {
-    this.windows = new Map(); // 存储不同IP和端口的请求窗口数据
+    this.windows = new Map();
   }
 
-  async checkLimit(env, ip, endpoint) {
-    const key = `ratelimit:${ip}:${endpoint}`;
+  checkLimit(ip, endpoint) {
+    const key = `${ip}:${endpoint}`;
     const maxRequests = this.getLimitForEndpoint(endpoint);
-    const windowMs = 60000; // 1分钟窗口
-
-    if (env.KV) {
-      try {
-        const now = Date.now();
-        const windowStart = now - windowMs;
-
-        let data = await env.KV.get(key, { type: 'json' });
-        if (!data || data.windowStart < windowStart) {
-          data = { windowStart: now, count: 1 };
-        } else {
-          data.count++;
-        }
-
-        await env.KV.put(key, JSON.stringify(data), { expirationTtl: 120 });
-
-        return data.count <= maxRequests;
-      } catch (e) {
-        console.error('限流检查失败:', e.message);
-        return true;
+    const now = Date.now();
+    const recent = (this.windows.get(key) || []).filter((time) => now - time < 60000);
+    if (this.windows.size > 10000) {
+      for (const [entry, times] of this.windows) {
+        if (now - times[times.length - 1] >= 60000) this.windows.delete(entry);
       }
+      while (this.windows.size > 10000) this.windows.delete(this.windows.keys().next().value);
     }
-
+    if (recent.length >= maxRequests) {
+      this.windows.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    this.windows.set(key, recent);
     return true;
   }
 
   getLimitForEndpoint(endpoint) {
     const limits = {
       '/api/upload': 30,
+      '/api/auth': 10,
+      '/api/preview': 120,
       '/api/delete': 60,
       '/api/random': 30,
       '/api/images': 20,
@@ -1097,3 +1250,5 @@ class RateLimiter {
     return limits[endpoint] || limits.default;
   }
 }
+
+const rateLimiter = new RateLimiter();

@@ -24,6 +24,7 @@ export const en_messages = {
     totpSecret: 'Secret Key',
     totpPlaceholder: 'Enter the verification code',
     totpEnabled: 'Two-Factor Authentication Enabled',
+    totpVerifiedSave: 'Code verified; save settings to enable two-factor authentication',
     totpDisabled: 'Two-Factor Authentication Disabled',
   },
   // Navigation Bar
@@ -310,6 +311,9 @@ export const en_messages = {
     lackAuthToken: 'Missing authentication token',
     wrongPassword: 'Incorrect password',
     authFailed: 'Authentication failed, please try again',
+    totpError: 'Invalid authenticator code',
+    totpNotConfigured: 'Two-factor authentication is not configured correctly',
+    invalidTotpSecret: 'Invalid two-factor secret',
     // Random image related
     randomIsDisable: 'Random image API is disabled',
     disallowedHost: 'This hostname is not allowed to access the random image API',
@@ -321,6 +325,7 @@ export const en_messages = {
     noUploadedImage: 'No image file provided',
     invalidFileType: 'Unsupported file type, only allow: JPG, PNG, GIF, WebP',
     fileTooLarge: 'File size exceeds limit (max 20MB)',
+    privateImageRequiresPrivateRepo: 'Private images require a private GitHub repository',
     // Repository related
     incompleteRepoConfig: 'Incomplete repository configuration',
     repoNotFound: 'Repository not found',

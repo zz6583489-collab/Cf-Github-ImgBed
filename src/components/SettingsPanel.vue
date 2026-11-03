@@ -453,10 +453,14 @@
                   <label>{{ t('settings.repoToken') }}</label>
                   <input
                     v-model="repo.token"
+                    @input="repo.clearToken = false"
                     class="input"
                     type="password"
-                    :placeholder="t('settings.repoTokenPlaceholder')"
+                    :placeholder="repo.hasToken ? (getLang() === 'zh-CN' ? '已配置；留空保持不变' : 'Configured; leave blank to keep') : t('settings.repoTokenPlaceholder')"
                   />
+                  <button v-if="repo.hasToken" type="button" class="btn btn-sm btn-secondary" @click="repo.clearToken = true; repo.hasToken = false; repo.token = ''">
+                    {{ getLang() === 'zh-CN' ? '清除专用令牌' : 'Remove repository token' }}
+                  </button>
                 </div>
                 <label class="checkbox">
                   <input
@@ -620,6 +624,7 @@
   import { getLang, setLang, t } from '../utils/i18n.js';
   import { setTheme, setCustomColor, getCurrentThemeName, getCustomColor } from '../utils/theme.js';
   import { totpManager } from '../utils/totp.js';
+  import QRCode from 'qrcode';
 
   // ==========================================
   // Props & Emits
@@ -689,6 +694,7 @@
   const totpSecret = ref('');
   const totpVerifyCode = ref('');
   const showTotpSetup = ref(false);
+  const totpSetupVerified = ref(false);
 
   const configStatus = ref('same');
 
@@ -707,6 +713,7 @@
   const onTotpToggle = () => {
     if (totpEnabled.value) {
       totpSecret.value = totpManager.generateSecret();
+      totpSetupVerified.value = false;
       showTotpSetup.value = true;
       nextTick(() => {
         generateQRCode();
@@ -714,17 +721,21 @@
     } else {
       showTotpSetup.value = false;
       totpSecret.value = '';
-      localStorage.removeItem('totpSecret');
-      localStorage.removeItem('totpEnabled');
+      totpSetupVerified.value = false;
     }
   };
 
-  const generateQRCode = () => {
+  const generateQRCode = async () => {
     const container = qrContainer.value;
     if (!container) return;
 
     const uri = totpManager.getTotpUri('admin', siteTitle.value || 'Cf-Github-ImgBed');
-    container.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(uri)}" alt="TOTP QR Code" style="width:150px;height:150px;border-radius:8px;" />`;
+    const img = document.createElement('img');
+    img.src = await QRCode.toDataURL(uri, { width: 150, margin: 1 });
+    img.alt = 'TOTP QR Code';
+    img.width = 150;
+    img.height = 150;
+    container.replaceChildren(img);
   };
 
   const copySecret = () => {
@@ -738,10 +749,8 @@
     const isValid = await totpManager.verify(totpVerifyCode.value);
 
     if (isValid) {
-      totpSecret.value = totpSecret.value;
-      localStorage.setItem('totpSecret', totpSecret.value);
-      localStorage.setItem('totpEnabled', 'true');
-      showToast(t('lock.totpEnabled'), 'success');
+      totpSetupVerified.value = true;
+      showToast(t('lock.totpVerifiedSave'), 'success');
       showTotpSetup.value = false;
       totpVerifyCode.value = '';
     } else {
@@ -865,7 +874,11 @@
     themeColor.value = getCurrentThemeName();
     customColor.value = getCustomColor();
     lang.value = getLang();
-    totpEnabled.value = localStorage.getItem('totpEnabled') === 'true';
+    totpEnabled.value = cached.totp?.enable === true;
+    totpSecret.value = '';
+    totpSetupVerified.value = false;
+    localStorage.removeItem('totpSecret');
+    localStorage.removeItem('totpEnabled');
     editingIndex.value = -1;
     visible.value = true;
   };
@@ -879,6 +892,10 @@
     saving.value = true;
 
     try {
+      if (totpEnabled.value && totpSecret.value && !totpSetupVerified.value) {
+        showToast(t('lock.totpError'), 'error');
+        return;
+      }
       const settings = {
         siteTitle: siteTitle.value,
         siteSubtitle: siteSubtitle.value,
@@ -900,20 +917,12 @@
 
       const currentTime = Date.now();
 
+      await saveRemoteSettings(props.authToken, settings, currentTime);
       saveSettings(settings, currentTime);
-
-      if (props.authToken) {
-        try {
-          await saveRemoteSettings(props.authToken, settings, currentTime);
-          showToast(t('settings.synced'), 'success');
-        } catch (err) {
-          showToast(t('settings.syncFailed', { error: t(`api.${err.message}`) }), 'warning');
-        }
-      } else {
-        showToast(t('settings.localOnly'), 'success');
-      }
-
-      emit('saved', settings);
+      totpSecret.value = '';
+      totpManager.secret = null;
+      showToast(t('settings.synced'), 'success');
+      emit('saved', getCachedSettings());
       close();
     } catch (err) {
       showToast(t('settings.saveError', { error: t(`api.${err.message}`) }), 'error');
@@ -925,7 +934,7 @@
   const loadSettingFromRemote = async () => {
     const closeLoading = showLoading(t('settings.syncingFromRemote'));
     try {
-      const remoteSettings = await fetchRemoteSettings();
+      const remoteSettings = await fetchRemoteSettings(props.authToken);
 
       saveSettings(remoteSettings);
       emit('saved', remoteSettings);

@@ -5,29 +5,17 @@
 import { DEFAULT_SETTINGS } from '../utils/defaults';
 
 const SETTINGS_KEY = 'cf_imgbed_settings';
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 /**
  * 从远程获取设置
  */
-export async function fetchRemoteSettings() {
-  try {
-    const res = await fetch('/api/settings');
-    if (!res.ok) {
-      throw new Error('获取远程设置失败');
-    }
-    const data = await res.json();
-
-    // 确保 repositories 是数组
-    if (!data.repositories || !Array.isArray(data.repositories)) {
-      data.repositories = [];
-    }
-
-    return { ...DEFAULT_SETTINGS, ...data };
-  } catch (error) {
-    console.error('获取远程设置失败，使用默认设置:', error.message);
-    return getDefaultSettings();
-  }
+export async function fetchRemoteSettings(token) {
+  if (!token) throw new Error('缺少认证 token');
+  const res = await fetch('/api/settings', { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error('获取远程设置失败');
+  const data = await res.json();
+  return sanitizeSettings({ ...DEFAULT_SETTINGS, ...data });
 }
 
 /**
@@ -69,15 +57,15 @@ export async function saveRemoteSettings(token, updates, updateTime) {
 /**
  * 获取设置（优先从 LocalStorage 读取）
  */
-export async function getSettings() {
-  const configStatus = await checkConfiguration();
-  if (configStatus === 'remoteNewer') {
-    const remoteSettings = await fetchRemoteSettings();
+export async function getSettings(token) {
+  try {
+    const remoteSettings = await fetchRemoteSettings(token);
     saveSettings(remoteSettings);
     return remoteSettings;
+  } catch (error) {
+    console.error('获取远程设置失败，使用本地缓存:', error.message);
+    return getCachedSettings();
   }
-
-  return getCachedSettings();
 }
 
 /**
@@ -88,7 +76,7 @@ export function saveSettings(settings, updateTime = Date.now()) {
     const data = {
       version: SETTINGS_VERSION,
       updateTime,
-      ...settings,
+      ...sanitizeSettings(settings),
     };
     // 确保 repositories 被正确序列化
     if (data.repositories && Array.isArray(data.repositories)) {
@@ -112,7 +100,11 @@ export function getCachedSettings() {
       if (!parsed.repositories || !Array.isArray(parsed.repositories)) {
         parsed.repositories = [];
       }
-      return { ...DEFAULT_SETTINGS, ...parsed };
+      const clean = sanitizeSettings({ ...DEFAULT_SETTINGS, ...parsed });
+      if (parsed.repositories?.some((repo) => repo.token) || parsed.totp?.secret) {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(clean));
+      }
+      return clean;
     } catch (e) {
       // ignore
     }
@@ -186,7 +178,7 @@ export function getImageUrl(settings, filename, repoId = null) {
     }
   } else {
     const origin = window.location.origin;
-    return `${origin}/api/preview/${filename}`;
+    return `${origin}/api/preview/${encodeURIComponent(filename)}?repoId=${encodeURIComponent(repoId || repo.id || 'default')}`;
   }
 }
 
@@ -195,4 +187,16 @@ export function getImageUrl(settings, filename, repoId = null) {
  */
 export function getDefaultSettings() {
   return { ...DEFAULT_SETTINGS };
+}
+
+function sanitizeSettings(settings) {
+  return {
+    ...settings,
+    repositories: (Array.isArray(settings.repositories) ? settings.repositories : []).map((repo) => ({
+      ...repo,
+      token: '',
+      hasToken: !!(repo.hasToken || repo.token),
+    })),
+    totp: { enable: settings.totp?.enable === true },
+  };
 }

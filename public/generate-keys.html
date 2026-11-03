@@ -60,7 +60,7 @@
   <h1>生成 RSA 密钥对</h1>
   <p>点击按钮生成 2048 位 RSA 密钥对，用于 Cf-Github-ImgBed 加密认证。</p>
   
-  <button onclick="generateKeys()">生成密钥对</button>
+  <button id="generateKeys">生成密钥对</button>
   
   <div id="result" style="display:none;">
     <div class="label">公钥 (PEM 格式)：</div>
@@ -71,13 +71,13 @@
     
     <div class="label">
       公钥 Base64 (环境变量用)：
-      <button class="copy-btn" onclick="copyToClipboard('publicKeyBase64')">复制</button>
+      <button class="copy-btn" data-copy="publicKeyBase64">复制</button>
     </div>
     <div class="output" id="publicKeyBase64"></div>
     
     <div class="label">
       私钥 Base64 (环境变量用)：
-      <button class="copy-btn" onclick="copyToClipboard('privateKeyBase64')">复制</button>
+      <button class="copy-btn" data-copy="privateKeyBase64">复制</button>
     </div>
     <div class="output" id="privateKeyBase64"></div>
     
@@ -85,59 +85,6 @@
     <div class="env-config" id="envConfig"></div>
   </div>
 
-  <script>
-    async function generateKeys() {
-      // 生成 RSA-OAEP 密钥对
-      const keyPair = await crypto.subtle.generateKey(
-        {
-          name: "RSA-OAEP",
-          modulusLength: 2048,
-          publicExponent: new Uint8Array([1, 0, 1]),
-          hash: "SHA-256"
-        },
-        true,
-        ["encrypt", "decrypt"]
-      );
-
-      // 导出公钥 (spki 格式)
-      const publicKeyBuffer = await crypto.subtle.exportKey("spki", keyPair.publicKey);
-      const publicKeyBase64 = arrayBufferToBase64(publicKeyBuffer);
-      const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${chunkString(publicKeyBase64, 64)}\n-----END PUBLIC KEY-----`;
-
-      // 导出私钥 (pkcs8 格式)
-      const privateKeyBuffer = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
-      const privateKeyBase64 = arrayBufferToBase64(privateKeyBuffer);
-      const privateKeyPem = `-----BEGIN PRIVATE KEY-----\n${chunkString(privateKeyBase64, 64)}\n-----END PRIVATE KEY-----`;
-
-      // 显示结果
-      document.getElementById('result').style.display = 'block';
-      document.getElementById('publicKeyPem').textContent = publicKeyPem;
-      document.getElementById('privateKeyPem').textContent = privateKeyPem;
-      document.getElementById('publicKeyBase64').textContent = publicKeyBase64;
-      document.getElementById('privateKeyBase64').textContent = privateKeyBase64;
-      document.getElementById('envConfig').textContent = 
-        `RSA_PUBLIC_KEY=${publicKeyBase64}\nRSA_PRIVATE_KEY=${privateKeyBase64}`;
-    }
-
-    function arrayBufferToBase64(buffer) {
-      const bytes = new Uint8Array(buffer);
-      let binary = '';
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return btoa(binary);
-    }
-
-    function chunkString(str, len) {
-      return str.match(new RegExp(`.{1,${len}}`, 'g')).join('\n');
-    }
-
-    function copyToClipboard(id) {
-      const text = document.getElementById(id).textContent;
-      navigator.clipboard.writeText(text).then(() => {
-        alert('已复制到剪贴板！');
-      });
-    }
-  </script>
+  <script src="/generate-keys.js" defer></script>
 </body>
 </html>

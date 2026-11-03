@@ -78,15 +78,19 @@ export async function checkRepository(repoId, token) {
   return await res.json();
 }
 
-export async function verifyAuth(encryptedToken) {
+export async function verifyAuth(encryptedToken, totpCode) {
   const res = await fetch(`${API_BASE}/auth`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ token: encryptedToken }),
+    body: JSON.stringify({ token: encryptedToken, totpCode }),
   });
   return await res.json();
+}
+
+export async function logoutSession() {
+  await fetch(`${API_BASE}/logout`, { method: 'POST' });
 }
 
 export async function verifyLogin(sessionToken) {

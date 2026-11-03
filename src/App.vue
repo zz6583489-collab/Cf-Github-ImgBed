@@ -717,11 +717,12 @@
     fetchPublicKey,
     verifyAuth,
     verifyLogin,
+    logoutSession,
     batchSetVisibility,
     fetchRandom,
   } from './core/api.js';
   import { encryptPassword } from './utils/crypto.js';
-  import { getSettings, getCachedSettings, getImageUrl, checkConfiguration } from './core/settings.js';
+  import { getSettings, getCachedSettings, getImageUrl } from './core/settings.js';
   import UploadManager from './components/UploadManager.vue';
   import ConfirmDialog from './components/ConfirmDialog.vue';
   import SettingsPanel from './components/SettingsPanel.vue';
@@ -733,7 +734,6 @@
   import { readImageFromClipboard } from './utils/clipboard.js';
   import { t, getLang } from './utils/i18n.js';
   import { applyTheme } from './utils/theme.js';
-  import { totpManager } from './utils/totp.js';
 
   // TODO: 配合API返回的Error类型，展示错误信息
 
@@ -764,8 +764,6 @@
 
   const authStep = ref('password');
   const totpCode = ref('');
-  const totpSecret = ref('');
-  const totpEnabled = ref(false);
   const tempEncryptedPassword = ref('');
 
   // 随机图片 API 开关
@@ -821,7 +819,7 @@
   // ==========================================
 
   const checkLoginStatus = async () => {
-    const token = localStorage.getItem('authToken');
+    const token = sessionStorage.getItem('authToken');
     if (!token) return false;
 
     const authResult = await verifyLogin(token);
@@ -830,7 +828,7 @@
       authToken.value = token;
       return true;
     } else {
-      localStorage.removeItem('authToken');
+      sessionStorage.removeItem('authToken');
       isAuthenticated.value = false;
       authToken.value = '';
 
@@ -855,7 +853,7 @@
       const res = await verifyAuth(encrypted);
 
       if (res.valid) {
-        if (totpEnabled.value && totpSecret.value) {
+        if (res.totpRequired) {
           tempEncryptedPassword.value = encrypted;
           authStep.value = 'totp';
           authPassword.value = '';
@@ -865,8 +863,8 @@
           await completeAuth(res.token);
         }
       } else {
-        authError.value = t('lock.passwordError');
-        showToast(t('lock.passwordError'), 'error');
+        authError.value = res.error ? t(`api.${res.error}`) : t('lock.passwordError');
+        showToast(authError.value, 'error');
       }
     } catch (err) {
       authError.value = t('lock.authFailed') + ': ' + t(`api.${err.message}`);
@@ -885,15 +883,10 @@
     authError.value = '';
 
     try {
-      totpManager.secret = totpSecret.value;
-      const isValid = await totpManager.verify(totpCode.value);
-
-      if (isValid) {
-        const res = await verifyAuth(tempEncryptedPassword.value);
-        if (res.valid) {
-          tempEncryptedPassword.value = '';
-          await completeAuth(res.token);
-        }
+      const res = await verifyAuth(tempEncryptedPassword.value, totpCode.value);
+      if (res.valid && res.token) {
+        tempEncryptedPassword.value = '';
+        await completeAuth(res.token);
       } else {
         authError.value = t('lock.totpError');
         showToast(t('lock.totpError'), 'error');
@@ -915,7 +908,7 @@
     authStep.value = 'password';
     authError.value = '';
 
-    localStorage.setItem('authToken', token);
+    sessionStorage.setItem('authToken', token);
     showToast(t('lock.welcome'), 'success');
 
     await loadSettings();
@@ -943,8 +936,10 @@
   };
 
   const logout = () => {
+    logoutSession().catch((error) => console.error('清除预览会话失败:', error));
     isAuthenticated.value = false;
     authToken.value = null;
+    sessionStorage.removeItem('authToken');
     localStorage.removeItem('authToken');
     images.value = [];
     randomImage.value = null;
@@ -958,25 +953,7 @@
 
   const loadSettings = async () => {
     try {
-      const configStatus = await checkConfiguration();
-      if (configStatus === 'remoteNewer' || configStatus === 'error') {
-        showToast(t('settings.detectedRemoteNewer'), 'warning');
-        const remoteSettings = await getSettings();
-        settings.value = {
-          ...settings.value,
-          ...remoteSettings,
-          repositories: Array.isArray(remoteSettings.repositories) ? remoteSettings.repositories : [],
-        };
-      }
-      if (configStatus === 'localNewer' || configStatus === 'same') {
-        if (configStatus === 'localNewer') showToast(t('settings.detectedRemoteNewer'), 'warning');
-        const localSettings = await getCachedSettings();
-        settings.value = {
-          ...settings.value,
-          ...localSettings,
-          repositories: Array.isArray(localSettings.repositories) ? localSettings.repositories : [],
-        };
-      }
+      settings.value = { ...settings.value, ...(await getSettings(authToken.value)) };
     } catch (err) {
       console.error('加载设置失败，使用缓存或默认设置:', err);
       const cached = getCachedSettings();
@@ -1002,8 +979,6 @@
     };
     document.title = `${settings.value.siteTitle} - ${settings.value.siteSubtitle}` || 'Cf-Github-ImgBed';
 
-    if (newSettings.totpEnabled !== undefined) totpEnabled.value = newSettings.totpEnabled;
-    if (newSettings.totpSecret !== undefined) totpSecret.value = newSettings.totpSecret;
 
     if (newSettings.activeRepository) {
       activeRepoId.value = newSettings.activeRepository;
@@ -1541,6 +1516,9 @@
   // ==========================================
 
   onMounted(async () => {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('totpSecret');
+    localStorage.removeItem('totpEnabled');
     detectTheme();
     applyThemeToDOM();
     applyTheme();
@@ -1557,19 +1535,9 @@
 
     if (!loginStatus) return;
 
-    const inits = [
-      loadSettings().then(async () => {
-        totpEnabled.value = settings.value.totp.enable;
-        totpSecret.value = settings.value.totp.secret;
-        if (totpSecret.value) {
-          totpManager.secret = totpSecret.value;
-          totpManager.enabled = totpEnabled.value;
-        }
-      }),
-      loadAllImages().then(() => loadImages(1)),
-    ];
-
-    Promise.allSettled(inits);
+    await loadSettings();
+    await loadAllImages();
+    loadImages(1);
 
     document.title = `${settings.value.siteTitle} - ${settings.value.siteSubtitle}` || 'Cf-Github-ImgBed';
     document.addEventListener('paste', onPaste);
