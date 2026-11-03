@@ -121,6 +121,7 @@ test('TOTP is enforced before a signed session is issued', async () => {
   let actualPrivate = true;
   let uploadStatus = 201;
   let uploadNetworkFailure = false;
+  let upstreamMessage = 'Resource not accessible by personal access token';
   globalThis.fetch = async (url, options) => {
     calls.push({ url: String(url), auth: options?.headers?.Authorization });
     if (String(url) === 'https://api.github.com/repos/owner/images') {
@@ -128,7 +129,10 @@ test('TOTP is enforced before a signed session is issued', async () => {
     }
     if (options?.method === 'PUT') {
       if (uploadNetworkFailure) throw new Error('mock network failure');
-      return Response.json(uploadStatus === 201 ? {} : { message: 'mock GitHub rejection' }, { status: uploadStatus });
+      return Response.json(uploadStatus === 201 ? {} : { message: upstreamMessage }, {
+        status: uploadStatus,
+        headers: { 'X-Accepted-GitHub-Permissions': 'contents=write', 'X-GitHub-Request-Id': 'test-request-id' },
+      });
     }
     return String(url).startsWith('https://api.github.com/')
       ? Response.json({ type: 'file', download_url: 'https://raw.githubusercontent.com/owner/images/main/images/secret.png' })
@@ -180,7 +184,22 @@ test('TOTP is enforced before a signed session is issued', async () => {
     deniedForm.set('repoId', 'private');
     const denied = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: deniedForm });
     assert.equal(denied.status, 400);
-    assert.deepEqual(await denied.json(), { error: 'githubPermissionDenied', githubStatus: 403 });
+    assert.deepEqual(await denied.json(), {
+      error: 'githubPermissionDenied',
+      githubStatus: 403,
+      githubMessage: 'Resource not accessible by personal access token',
+      tokenSource: 'repository',
+      requiredPermissions: 'contents=write',
+      githubRequestId: 'test-request-id',
+    });
+
+    upstreamMessage = 'You have exceeded a secondary rate limit';
+    const limitedForm = new FormData();
+    limitedForm.set('image', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'sample.png');
+    limitedForm.set('repoId', 'private');
+    const limited = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: limitedForm });
+    assert.equal(limited.status, 429);
+    assert.equal((await limited.json()).error, 'githubRateLimited');
 
     uploadNetworkFailure = true;
     const networkForm = new FormData();

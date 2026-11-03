@@ -328,6 +328,10 @@ export const zh_cn_messages = {
     githubPermissionDenied: 'GitHub Token 无法写入目标仓库，请检查权限',
     githubRepoOrBranchNotFound: '未找到目标仓库或分支，请检查仓库配置',
     githubUploadRejected: 'GitHub 拒绝上传，请检查仓库路径和文件限制',
+    githubRateLimited: 'GitHub API 已限流，请稍后再试',
+    githubSsoRequired: 'GitHub Token 需要通过组织的 SSO 授权',
+    repositoryToken: '仓库专用 Token',
+    globalToken: '全局 Token',
     internalError: '服务器处理异常，请查看 Cloudflare 日志',
     // 仓库相关
     incompleteRepoConfig: '仓库配置不完整',

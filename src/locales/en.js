@@ -331,6 +331,10 @@ export const en_messages = {
     githubPermissionDenied: 'The GitHub token cannot write to the target repository',
     githubRepoOrBranchNotFound: 'Target repository or branch not found',
     githubUploadRejected: 'GitHub rejected the upload; check the repository path and file limits',
+    githubRateLimited: 'GitHub API rate limit reached; retry later',
+    githubSsoRequired: 'The GitHub token needs organization SSO authorization',
+    repositoryToken: 'repository token',
+    globalToken: 'global token',
     internalError: 'Server error; check the Cloudflare logs',
     // Repository related
     incompleteRepoConfig: 'Incomplete repository configuration',

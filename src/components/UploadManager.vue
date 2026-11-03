@@ -468,7 +468,11 @@
     const key = `api.${code}`;
     const translated = t(key);
     const message = translated === key ? error.message : translated;
-    return error.githubStatus ? `${message} (GitHub ${error.githubStatus})` : message;
+    const tokenSource = error.tokenSource === 'repository' ? t('api.repositoryToken') :
+      error.tokenSource === 'global' ? t('api.globalToken') : '';
+    const status = error.githubStatus ? ` (GitHub ${error.githubStatus}${tokenSource ? `, ${tokenSource}` : ''})` : '';
+    const permissions = error.requiredPermissions ? ` [${error.requiredPermissions}]` : '';
+    return `${message}${status}${permissions}${error.githubMessage ? `: ${error.githubMessage}` : ''}`;
   };
 
   const addFiles = (files) => {

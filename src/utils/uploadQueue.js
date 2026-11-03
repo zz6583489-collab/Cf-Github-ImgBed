@@ -250,6 +250,9 @@ export class UploadQueue {
         if (attempt + 1 >= this.maxRetries) {
           const finalError = new Error(`上传失败（已重试${this.maxRetries}次）: ${error.message}`);
           finalError.githubStatus = error.githubStatus;
+          finalError.githubMessage = error.githubMessage;
+          finalError.tokenSource = error.tokenSource;
+          finalError.requiredPermissions = error.requiredPermissions;
           throw finalError;
         }
 
@@ -306,18 +309,23 @@ export class UploadQueue {
             } catch (e) {
               reject(new Error('解析响应失败'));
             }
-          } else if (xhr.status === 400) {
-            // 400 错误：客户端错误（文件类型、大小等），不重试
+          } else if (xhr.status === 400 || xhr.status === 429) {
+            // 客户端错误或限流响应，不立即重试。
             let message = '请求错误';
-            let githubStatus;
+            let details = {};
             try {
               const err = JSON.parse(xhr.responseText);
               message = err.error || message;
-              githubStatus = err.githubStatus;
+              details = err;
             } catch {}
             const error = new Error(message);
             error.noRetry = true;
-            error.githubStatus = githubStatus;
+            Object.assign(error, {
+              githubStatus: details.githubStatus,
+              githubMessage: details.githubMessage,
+              tokenSource: details.tokenSource,
+              requiredPermissions: details.requiredPermissions,
+            });
             reject(error);
           } else if (xhr.status === 401) {
             // 认证错误，不重试
@@ -339,14 +347,19 @@ export class UploadQueue {
           } else {
             // 500 等服务器错误，可以重试
             let message = `上传失败 (${xhr.status})`;
-            let githubStatus;
+            let details = {};
             try {
               const err = JSON.parse(xhr.responseText);
               message = err.error || message;
-              githubStatus = err.githubStatus;
+              details = err;
             } catch {}
             const error = new Error(message);
-            error.githubStatus = githubStatus;
+            Object.assign(error, {
+              githubStatus: details.githubStatus,
+              githubMessage: details.githubMessage,
+              tokenSource: details.tokenSource,
+              requiredPermissions: details.requiredPermissions,
+            });
             reject(error);
           }
         }

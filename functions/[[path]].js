@@ -284,6 +284,7 @@ async function getRepositories(env) {
   const globalToken = env.GITHUB_TOKEN || '';
   repositories = repositories.map((repo) => ({
     ...repo,
+    tokenSource: repo.token ? 'repository' : 'global',
     token: repo.token || globalToken,
   }));
 
@@ -296,6 +297,7 @@ async function getRepositories(env) {
       repo: '',
       branch: 'main',
       path: 'images',
+      tokenSource: 'global',
       token: globalToken,
       isDefault: false,
       isPublic: false,
@@ -463,14 +465,29 @@ async function handleUpload(request, env) {
 
   if (!ghResponse.ok) {
     const err = await ghResponse.json().catch(() => ({}));
-    console.error('GitHub 拒绝上传:', ghResponse.status, err?.message || 'unknown');
-    const upstreamUnavailable = ghResponse.status >= 500 || ghResponse.status === 429;
+    const githubMessage = typeof err?.message === 'string'
+      ? err.message.replace(/(?:ghp_|github_pat_|gho_|ghu_|ghs_)[A-Za-z0-9_]+/g, '[redacted]').slice(0, 300)
+      : '';
+    console.error('GitHub 拒绝上传:', ghResponse.status, githubMessage || 'unknown');
+    const rateLimited = ghResponse.status === 429 || ghResponse.headers.get('X-RateLimit-Remaining') === '0' ||
+      /(?:secondary|primary) rate limit/i.test(githubMessage);
+    const ssoRequired = ghResponse.headers.has('X-GitHub-SSO');
+    const upstreamUnavailable = ghResponse.status >= 500 || rateLimited;
     let error = 'githubUploadRejected';
-    if (upstreamUnavailable) error = 'githubUnavailable';
+    if (rateLimited) error = 'githubRateLimited';
+    else if (upstreamUnavailable) error = 'githubUnavailable';
+    else if (ssoRequired) error = 'githubSsoRequired';
     else if (ghResponse.status === 401 || ghResponse.status === 403) error = 'githubPermissionDenied';
     else if (ghResponse.status === 404) error = 'githubRepoOrBranchNotFound';
-    const status = upstreamUnavailable ? 502 : 400;
-    return jsonResponse({ error, githubStatus: ghResponse.status }, status);
+    const status = rateLimited ? 429 : upstreamUnavailable ? 502 : 400;
+    return jsonResponse({
+      error,
+      githubStatus: ghResponse.status,
+      githubMessage,
+      tokenSource: repo.tokenSource,
+      requiredPermissions: ghResponse.headers.get('X-Accepted-GitHub-Permissions') || undefined,
+      githubRequestId: ghResponse.headers.get('X-GitHub-Request-Id') || undefined,
+    }, status);
   }
 
   const imageUrl = `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${repo.branch || 'main'}/${filePath}`;
