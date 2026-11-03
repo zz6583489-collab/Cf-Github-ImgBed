@@ -138,9 +138,10 @@ export async function checkConfiguration() {
  * @param {Object} settings - 设置对象
  * @param {string} filename - 文件名
  * @param {string} repoId - 仓库 ID
+ * @param {boolean} isImagePublic - 图片是否已标记为公开
  * @returns {string} 完整的图片 URL
  */
-export function getImageUrl(settings, filename, repoId = null) {
+export function getImageUrl(settings, filename, repoId = null, isImagePublic = false) {
   if (!filename) return '';
 
   let repo = null;
@@ -169,7 +170,7 @@ export function getImageUrl(settings, filename, repoId = null) {
   // 使用仓库的 path，如果为空则使用空字符串，不要默认 "images"
   const path = (repo.path || '').replace(/^\/+|\/+$/g, '');
 
-  if (repo.isPublic && repo.owner && repo.repo) {
+  if (isImagePublic && repo.isPublic && repo.owner && repo.repo) {
     const cdn = cdnBase.replace(/\/+$/, '');
     if (path) {
       return `${cdn}/${repo.owner}/${repo.repo}@${branch}/${path}/${filename}`;

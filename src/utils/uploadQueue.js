@@ -28,6 +28,7 @@ export class UploadQueue {
    * @param {Object} options - 上传选项
    * @param {string} options.token - 认证 token
    * @param {boolean} options.isPublic - 是否公开
+   * @param {string} options.repoId - 目标仓库 ID
    * @param {Function} options.onProgress - 进度回调 (id, percent)
    * @param {Function} options.onComplete - 完成回调 (id, result)
    * @param {Function} options.onError - 错误回调 (id, error)
@@ -40,6 +41,7 @@ export class UploadQueue {
       file,
       token: options.token || '',
       isPublic: options.isPublic || false,
+      repoId: options.repoId || 'default',
       onProgress: options.onProgress || (() => {}),
       onComplete: options.onComplete || (() => {}),
       onError: options.onError || (() => {}),
@@ -294,9 +296,8 @@ export class UploadQueue {
 
       xhr.onreadystatechange = () => {
         if (xhr.readyState === XMLHttpRequest.DONE) {
-          task.onProgress(task.id, 100);
-
           if (xhr.status >= 200 && xhr.status < 300) {
+            task.onProgress(task.id, 100);
             try {
               const response = JSON.parse(xhr.responseText);
               resolve(response);
@@ -305,16 +306,14 @@ export class UploadQueue {
             }
           } else if (xhr.status === 400) {
             // 400 错误：客户端错误（文件类型、大小等），不重试
+            let message = '请求错误';
             try {
               const err = JSON.parse(xhr.responseText);
-              const error = new Error(err.error || '请求错误');
-              error.noRetry = true;
-              reject(error);
-            } catch (e) {
-              const error = new Error('请求错误');
-              error.noRetry = true;
-              reject(error);
-            }
+              message = err.error || message;
+            } catch {}
+            const error = new Error(message);
+            error.noRetry = true;
+            reject(error);
           } else if (xhr.status === 401) {
             // 认证错误，不重试
             const error = new Error('认证失败，请重新登录');

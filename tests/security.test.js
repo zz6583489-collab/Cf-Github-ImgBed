@@ -118,8 +118,13 @@ test('TOTP is enforced before a signed session is issued', async () => {
 
   const calls = [];
   const originalFetch = globalThis.fetch;
+  let actualPrivate = true;
   globalThis.fetch = async (url, options) => {
     calls.push({ url: String(url), auth: options?.headers?.Authorization });
+    if (String(url) === 'https://api.github.com/repos/owner/images') {
+      return Response.json({ private: actualPrivate });
+    }
+    if (options?.method === 'PUT') return Response.json({}, { status: 201 });
     return String(url).startsWith('https://api.github.com/')
       ? Response.json({ type: 'file', download_url: 'https://raw.githubusercontent.com/owner/images/main/images/secret.png' })
       : new Response('PRIVATE_IMAGE', { headers: { 'Content-Type': 'image/png' } });
@@ -144,8 +149,24 @@ test('TOTP is enforced before a signed session is issued', async () => {
     form.set('image', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'sample.png');
     form.set('repoId', 'private');
     const upload = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
-    assert.equal(upload.status, 400);
-    assert.equal((await upload.json()).error, 'privateImageRequiresPrivateRepo');
+    assert.equal(upload.status, 200);
+    assert.equal((await upload.json()).public, false);
+
+    actualPrivate = false;
+    const publicRepoForm = new FormData();
+    publicRepoForm.set('image', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'sample.png');
+    publicRepoForm.set('repoId', 'private');
+    const rejected = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: publicRepoForm });
+    assert.equal(rejected.status, 400);
+    assert.equal((await rejected.json()).error, 'privateImageRequiresPrivateRepo');
+
+    actualPrivate = null;
+    const unknownRepoForm = new FormData();
+    unknownRepoForm.set('image', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'sample.png');
+    unknownRepoForm.set('repoId', 'private');
+    const unknown = await request('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: unknownRepoForm });
+    assert.equal(unknown.status, 400);
+    assert.equal((await unknown.json()).error, 'repoVisibilityCheckFailed');
   } finally {
     settings.repositories[0].isPublic = false;
     publicImages.length = 0;

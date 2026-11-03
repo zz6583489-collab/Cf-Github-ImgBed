@@ -323,6 +323,7 @@ export const zh_cn_messages = {
     invalidFileType: '不支持的文件类型，仅允许：JPG、PNG、GIF、WebP',
     fileTooLarge: '文件大小超过限制（最大 20MB）',
     privateImageRequiresPrivateRepo: '私密图片只能存入 GitHub 私有仓库',
+    repoVisibilityCheckFailed: '无法核实仓库是否为私有；请检查 GitHub Token 对该仓库的访问权限',
     // 仓库相关
     incompleteRepoConfig: '仓库配置不完整',
     repoNotFound: '仓库不存在',

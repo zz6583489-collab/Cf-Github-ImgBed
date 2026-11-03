@@ -326,6 +326,7 @@ export const en_messages = {
     invalidFileType: 'Unsupported file type, only allow: JPG, PNG, GIF, WebP',
     fileTooLarge: 'File size exceeds limit (max 20MB)',
     privateImageRequiresPrivateRepo: 'Private images require a private GitHub repository',
+    repoVisibilityCheckFailed: 'Could not verify repository visibility; check the GitHub token access',
     // Repository related
     incompleteRepoConfig: 'Incomplete repository configuration',
     repoNotFound: 'Repository not found',

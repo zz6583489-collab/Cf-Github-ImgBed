@@ -991,7 +991,7 @@
     if (isAuthenticated.value) {
       allImages.value = allImages.value.map((img) => ({
         ...img,
-        url: getImageUrl(settings.value, img.name, img.repoId || 'default'),
+        url: getImageUrl(settings.value, img.name, img.repoId || 'default', img.public),
       }));
       loadImages(currentPage.value);
     }
@@ -1072,7 +1072,7 @@
       const data = await fetchRandom(parameter);
 
       if (data && data.name) {
-        randomImage.value = { url: getImageUrl(settings.value, data.name, data.repoId) };
+        randomImage.value = { url: getImageUrl(settings.value, data.name, data.repoId, true) };
       }
     } catch (err) {
       showToast(`${t('random.fetchFailed')}: ${t(`api.${err.message}`)}`, 'error');
@@ -1107,7 +1107,7 @@
           ...img,
           repoId: repoId,
           repoName: repoName,
-          url: getImageUrl(settings.value, img.name, repoId),
+          url: getImageUrl(settings.value, img.name, repoId, img.public),
           rawUrl: img.url,
         };
       });
@@ -1377,7 +1377,7 @@
   const previewImage = (image) => {
     previewData.value = {
       ...image,
-      url: image.url || getImageUrl(settings.value, image.name),
+      url: image.url || getImageUrl(settings.value, image.name, image.repoId, image.public),
     };
     previewVisible.value = true;
   };

@@ -410,8 +410,10 @@ async function handleUpload(request, env) {
     return jsonResponse({ error: 'incompleteRepoConfig' }, 500);
   }
 
-  if (!isPublic && (repo.isPublic || !(await isPrivateRepository(repo)))) {
-    return jsonResponse({ error: 'privateImageRequiresPrivateRepo' }, 400);
+  if (!isPublic) {
+    const visibility = await getRepositoryVisibility(repo);
+    if (visibility === null) return jsonResponse({ error: 'repoVisibilityCheckFailed' }, 400);
+    if (!visibility) return jsonResponse({ error: 'privateImageRequiresPrivateRepo' }, 400);
   }
 
   const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' }[file.type];
@@ -592,8 +594,9 @@ async function handleBatchVisibility(request, env) {
         if (!repo) throw new Error('repoNotFound');
         if (!isPublic) {
           if (!privateRepoChecks.has(repoId)) {
-            privateRepoChecks.set(repoId, !repo.isPublic && await isPrivateRepository(repo));
+            privateRepoChecks.set(repoId, await getRepositoryVisibility(repo));
           }
+          if (privateRepoChecks.get(repoId) === null) throw new Error('repoVisibilityCheckFailed');
           if (!privateRepoChecks.get(repoId)) throw new Error('privateImageRequiresPrivateRepo');
         }
         if (isPublic) {
@@ -637,16 +640,16 @@ async function getRepositoryById(env, repoId) {
   return repositories.find((r) => r.id === repoId) || null;
 }
 
-async function isPrivateRepository(repo) {
+async function getRepositoryVisibility(repo) {
   try {
     const response = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}`, {
       headers: { Authorization: `Bearer ${repo.token}`, 'User-Agent': 'Cf-Github-ImgBed' },
     });
-    if (!response.ok) return false;
+    if (!response.ok) return null;
     const metadata = await response.json();
-    return metadata.private === true;
+    return typeof metadata.private === 'boolean' ? metadata.private : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

@@ -146,7 +146,9 @@
             >
               <label>{{ t('upload.targetRepo') }}</label>
               <select
-                v-model="selectedRepo"
+                v-model="item.repoId"
+                @change="onRepoChange(item)"
+                :disabled="item.status !== 'pending' && item.status !== 'failed'"
                 class="repo-select-input"
               >
                 <option
@@ -161,7 +163,7 @@
 
             <div
               class="privacy-toggle"
-              v-if="item.status === 'pending'"
+              v-if="item.status === 'pending' || item.status === 'failed'"
             >
               <label class="toggle-switch">
                 <input
@@ -380,7 +382,6 @@
   // 响应式数据
   // ==========================================
 
-  const selectedRepo = ref(props.activeRepository || 'default');
   const showModal = ref(false);
   const showMinimized = ref(false);
   const dragOver = ref(false);
@@ -458,7 +459,23 @@
     addFiles(files);
   };
 
+  const onRepoChange = (item) => {
+    item.isPublic = false;
+  };
+
+  const uploadErrorText = (error) => {
+    const key = `api.${error.message}`;
+    const translated = t(key);
+    return translated === key ? error.message : translated;
+  };
+
   const addFiles = (files) => {
+    const initialRepo = props.repositories.find((repo) => repo.id === props.activeRepository) ||
+      props.repositories[0];
+    if (!initialRepo) {
+      showToast(t('settings.repoEmpty'), 'warning');
+      return;
+    }
     const validFiles = files.filter((f) => {
       if (!f.type.startsWith('image/')) {
         showToast(`${f.name} ${t('upload.notImage')}`, 'warning');
@@ -474,16 +491,12 @@
     for (const file of validFiles) {
       const id = ++nextLocalId.value;
 
-      let repoId;
-      if (props.repositories.length > 1) repoId = selectedRepo.value;
-      else repoId = props.repositories[0].id;
-
       const item = {
         id,
         file,
         displayName: truncateFileName(file.name),
         displaySize: formatFileSize(file.size),
-        repoId,
+        repoId: initialRepo.id,
         preview: '',
         isPublic: false,
         status: 'pending',
@@ -560,8 +573,8 @@
             item.cancelled = true;
           } else {
             item.status = 'failed';
-            item.error = error.message;
-            showToast(t('upload.failUpload', { name: item.displayName, error: error.message }), 'error');
+            item.error = uploadErrorText(error);
+            showToast(t('upload.failUpload', { name: item.displayName, error: item.error }), 'error');
           }
           checkAllDone();
         },
@@ -584,6 +597,7 @@
     const queueId = uploadQueue.value.add(item.file, {
       token: props.authToken,
       isPublic: item.isPublic,
+      repoId: item.repoId,
       onProgress: (id, percent) => {
         item.progress = percent;
         if (item.status !== 'uploading') item.status = 'uploading';
@@ -599,8 +613,8 @@
           item.cancelled = true;
         } else {
           item.status = 'failed';
-          item.error = error.message;
-          showToast(t('upload.failUpload', { name: item.displayName, error: error.message }), 'error');
+          item.error = uploadErrorText(error);
+          showToast(t('upload.failUpload', { name: item.displayName, error: item.error }), 'error');
         }
         checkAllDone();
       },
